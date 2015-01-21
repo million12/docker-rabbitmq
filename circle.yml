@@ -1,0 +1,62 @@
+machine:
+  services:
+    - docker
+
+dependencies:
+  override:
+    - docker build --tag=million12/rabbitmq .
+
+test:
+  override:
+    # Basic test with default password
+    - docker run -d -p 15673:15672 --name rabbitmq million12/rabbitmq
+    - docker logs -f rabbitmq > ${CIRCLE_ARTIFACTS}/rabbitmq-default.log:
+        background: true
+    - while true; do if docker logs rabbitmq | grep "Server startup complete"; then break; else sleep 0.5; fi done
+    - curl -i --user admin:password http://localhost:15673/api/vhosts | grep "200 OK"
+    - docker rm -f rabbitmq || true
+    
+    # Set custom password
+    - docker run -d -p 15673:15672 --env="RABBITMQ_PASS=passw" --name rabbitmq million12/rabbitmq
+    - docker logs -f rabbitmq > ${CIRCLE_ARTIFACTS}/rabbitmq-custom-pass.log:
+        background: true
+    - while true; do if docker logs rabbitmq | grep "Server startup complete"; then break; else sleep 0.5; fi done
+    - curl -i --user admin:passw http://localhost:15673/api/vhosts | grep "200 OK"
+    - docker rm -f rabbitmq || true
+    
+    # Execute extra commands passed as ENV variable and check for results
+    - docker run -d -p 15673:15672 -e USER_COMMANDS='rabbitmqctl add_vhost test-vhost' --name rabbitmq million12/rabbitmq
+    - docker logs -f rabbitmq > ${CIRCLE_ARTIFACTS}/rabbitmq-command-env.log:
+        background: true
+    - while true; do if docker logs rabbitmq | grep "Server startup complete"; then break; else sleep 0.5; fi done
+    - curl -i --user admin:password http://localhost:15673/api/vhosts
+    - curl -i --user admin:password http://localhost:15673/api/vhosts | grep "200 OK"
+    - curl -i --user admin:password http://localhost:15673/api/vhosts | grep "test-vhost"
+    - docker rm -f rabbitmq || true
+    
+    # Execute extra commands passed as arguments to `docker run` and check for results
+    - |
+      docker run -d -p 15673:15672 --name rabbitmq million12/rabbitmq "
+        rabbitmqctl add_user test test && \
+        rabbitmqctl set_user_tags test administrator && \
+        rabbitmqctl add_vhost test-vhost && \
+        rabbitmqctl set_permissions -p test-vhost test '.*' '.*' '.*'
+      "
+    - docker logs -f rabbitmq > ${CIRCLE_ARTIFACTS}/rabbitmq-command-args.log:
+        background: true
+    - while true; do if docker logs rabbitmq | grep "Server startup complete"; then break; else sleep 0.5; fi done
+    - curl -i --user admin:password http://localhost:15673/api/users
+    - curl -i --user admin:password http://localhost:15673/api/users | grep "200 OK"
+    - curl -i --user admin:password http://localhost:15673/api/users | grep "test"
+    - curl -i --user admin:password http://localhost:15673/api/users | grep "test"
+    # also try to use newly created user to log in
+    - curl -i --user test:test http://localhost:15673/api/vhosts
+    - curl -i --user test:test http://localhost:15673/api/vhosts | grep "200 OK"
+    - curl -i --user test:test http://localhost:15673/api/vhosts | grep "test-vhost"
+
+
+deployment:
+  rebuild_image_on_docker_hub:
+    branch: master
+    commands:
+      - curl --data "build=true" -X POST https://registry.hub.docker.com/u/million12/rabbitmq/trigger/6f9ac558-a18c-11e4-825e-0242ac110068/
